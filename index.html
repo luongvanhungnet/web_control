@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>All In One – Quản lý công việc URL</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--muted:#94a3b8;--text:#e2e8f0;--acc:#38bdf8;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:16px 24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;border-bottom:1px solid #334155}
+  h1{margin:0;font-size:22px}
+  h2{margin:0 0 12px;font-size:18px;display:flex;justify-content:space-between;align-items:center}
+  button{background:var(--acc);color:#0f172a;border:0;border-radius:8px;padding:8px 14px;font-weight:600;cursor:pointer}
+  button.ghost{background:#334155;color:var(--text)}
+  button.danger{background:var(--bad);color:#fff}
+  button.small{padding:5px 10px;font-size:13px}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:20px;padding:20px}
+  @media(max-width:900px){main{grid-template-columns:1fr}}
+  section{background:#111827;border-radius:14px;padding:16px}
+  .task{background:var(--card);border-radius:12px;padding:14px;margin-bottom:12px;border-left:4px solid var(--acc)}
+  .task.done{border-left-color:var(--ok)}
+  .task.running{box-shadow:0 0 0 2px var(--warn)}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .name{font-weight:600;font-size:16px}
+  .name a{color:var(--text);text-decoration:none}
+  .name a:hover{color:var(--acc)}
+  .meta{color:var(--muted);font-size:13px;margin-top:2px}
+  .clock{font-family:Consolas,monospace;font-size:26px;font-weight:700}
+  .bar{height:8px;background:#334155;border-radius:4px;overflow:hidden;margin:10px 0}
+  .bar>div{height:100%;background:var(--acc);transition:width .3s}
+  .done .bar>div{background:var(--ok)}
+  .actions{display:flex;gap:6px;flex-wrap:wrap}
+  .empty{color:var(--muted);text-align:center;padding:20px}
+  .tag{font-size:11px;padding:2px 8px;border-radius:10px;background:#334155;color:var(--muted);margin-left:6px}
+  dialog{background:var(--card);color:var(--text);border:0;border-radius:14px;padding:20px;width:min(460px,92vw)}
+  dialog::backdrop{background:#000a}
+  label{display:block;margin:10px 0 4px;font-size:14px;color:var(--muted)}
+  input,select{width:100%;padding:8px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:var(--text)}
+  .days{display:flex;gap:4px;flex-wrap:wrap}
+  .days label{margin:0;display:flex;align-items:center;gap:4px;background:#0f172a;padding:4px 8px;border-radius:6px;color:var(--text)}
+  .days input{width:auto}
+  .summary{color:var(--muted);font-size:14px}
+</style>
+</head>
+<body>
+<header>
+  <h1>🗂️ Quản lý công việc URL</h1>
+  <div class="row">
+    <span class="summary" id="today"></span>
+    <button onclick="openForm()">+ Thêm công việc</button>
+  </div>
+</header>
+
+<main>
+  <section>
+    <h2>📅 Mục tiêu ngày <span class="summary" id="daySum"></span></h2>
+    <div id="dailyList"></div>
+  </section>
+  <section>
+    <h2>🗓️ Mục tiêu tuần <span class="summary" id="weekSum"></span></h2>
+    <div id="weeklyList"></div>
+  </section>
+</main>
+
+<dialog id="dlg">
+  <form id="form" method="dialog">
+    <h2 id="formTitle">Thêm công việc</h2>
+    <input type="hidden" id="fId">
+    <label>Tên công việc</label>
+    <input id="fName" required placeholder="VD: Học tiếng Anh">
+    <label>Đường dẫn URL</label>
+    <input id="fUrl" type="url" required placeholder="https://...">
+    <label>Loại mục tiêu</label>
+    <select id="fType" onchange="toggleType()">
+      <option value="daily">Mục tiêu ngày (tuần = tổng các ngày)</option>
+      <option value="weekly">Chỉ mục tiêu tuần</option>
+    </select>
+    <div id="dailyFields">
+      <label>Thời lượng mỗi ngày</label>
+      <select id="fDaily"></select>
+      <label>Các ngày áp dụng</label>
+      <div class="days" id="fDays"></div>
+    </div>
+    <div id="weeklyFields" hidden>
+      <label>Thời lượng mỗi tuần</label>
+      <select id="fWeekly"></select>
+    </div>
+    <div class="row" style="margin-top:18px;justify-content:flex-end">
+      <button type="button" class="ghost" onclick="dlg.close()">Hủy</button>
+      <button type="submit">Lưu</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const KEY = 'aio_tasks_v1';
+const DAY_NAMES = ['CN','T2','T3','T4','T5','T6','T7'];
+const DAILY_OPTS = [5,10,15,20,25,30,45,60,90,120,150,180,240];
+const WEEKLY_OPTS = [30,60,90,120,180,240,300,360,420,480,600,720,900,1200];
+
+// state: { tasks:[{id,name,url,type,daily,days:[0..6],weekly,log:{'YYYY-MM-DD':sec},runStart:null|ms}] }
+let state = JSON.parse(localStorage.getItem(KEY) || '{"tasks":[]}');
+const save = () => localStorage.setItem(KEY, JSON.stringify(state));
+
+const pad = n => String(n).padStart(2,'0');
+const dateKey = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const todayKey = () => dateKey(new Date());
+function weekKeys(){ // Monday -> Sunday of current week
+  const d = new Date(); const dow = (d.getDay()+6)%7;
+  const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate()-dow);
+  return [...Array(7)].map((_,i)=>dateKey(new Date(mon.getFullYear(),mon.getMonth(),mon.getDate()+i)));
+}
+const fmtMin = m => m>=60 ? `${Math.floor(m/60)}h${m%60?pad(m%60):''}` : `${m}p`;
+function fmtClock(s){
+  const neg = s<0; s=Math.abs(Math.round(s));
+  const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60;
+  return (neg?'+':'') + `${pad(h)}:${pad(m)}:${pad(x)}`;
+}
+
+// commit running time into log (split across midnight)
+function commit(t){
+  if(!t.runStart) return;
+  let start = t.runStart, now = Date.now();
+  while(start < now){
+    const d = new Date(start);
+    const next = new Date(d.getFullYear(), d.getMonth(), d.getDate()+1).getTime();
+    const end = Math.min(next, now);
+    const k = dateKey(d);
+    t.log[k] = (t.log[k]||0) + (end-start)/1000;
+    start = end;
+  }
+  t.runStart = now;
+}
+const liveExtra = t => t.runStart ? (Date.now()-t.runStart)/1000 : 0;
+const spentDay = t => (t.log[todayKey()]||0) + liveExtra(t);
+const spentWeek = t => weekKeys().reduce((a,k)=>a+(t.log[k]||0),0) + liveExtra(t);
+const isToday = t => t.days.includes(new Date().getDay());
+const dailyTarget = t => t.daily*60;
+const weeklyTarget = t => t.type==='daily' ? t.daily*60*t.days.length : t.weekly*60;
+
+function toggle(id){
+  const t = state.tasks.find(x=>x.id===id);
+  if(t.runStart){ commit(t); t.runStart=null; }
+  else {
+    state.tasks.forEach(o=>{ if(o.runStart){ commit(o); o.runStart=null; } }); // one at a time
+    t.runStart = Date.now();
+  }
+  save(); render();
+}
+function openUrl(id){
+  const t = state.tasks.find(x=>x.id===id);
+  window.open(t.url,'_blank');
+  if(!t.runStart) toggle(id);
+}
+function resetToday(id){
+  const t = state.tasks.find(x=>x.id===id);
+  if(!confirm('Đặt lại thời gian hôm nay cho "'+t.name+'"?')) return;
+  if(t.runStart) t.runStart = Date.now();
+  delete t.log[todayKey()]; save(); render();
+}
+function del(id){
+  if(!confirm('Xóa công việc này?')) return;
+  state.tasks = state.tasks.filter(x=>x.id!==id); save(); render();
+}
+
+function card(t, mode){
+  const target = mode==='day' ? dailyTarget(t) : weeklyTarget(t);
+  const spent = mode==='day' ? spentDay(t) : spentWeek(t);
+  const remain = target - spent;
+  const pct = Math.min(100, target? spent/target*100 : 0);
+  const done = remain<=0;
+  const tag = mode==='week' ? (t.type==='daily'
+      ? `<span class="tag">${fmtMin(t.daily)} × ${t.days.length} ngày</span>`
+      : `<span class="tag">chỉ tuần</span>`) : '';
+  return `<div class="task ${done?'done':''} ${t.runStart?'running':''}" data-id="${t.id}" data-mode="${mode}">
+    <div class="row">
+      <div>
+        <div class="name"><a href="#" onclick="openUrl('${t.id}');return false" title="${t.url}">🔗 ${esc(t.name)}</a>${tag}</div>
+        <div class="meta">Mục tiêu ${fmtMin(target/60)} · Đã làm <span class="sp">${fmtClock(spent)}</span></div>
+      </div>
+      <div class="clock" style="color:${done?'var(--ok)':'inherit'}">${fmtClock(remain)}</div>
+    </div>
+    <div class="bar"><div style="width:${pct}%"></div></div>
+    <div class="row">
+      <div class="actions">
+        <button class="small" onclick="toggle('${t.id}')">${t.runStart?'⏸ Dừng':'▶ Bắt đầu'}</button>
+        <button class="small ghost" onclick="openUrl('${t.id}')">Mở link</button>
+      </div>
+      <div class="actions">
+        <button class="small ghost" onclick="openForm('${t.id}')">Sửa</button>
+        <button class="small ghost" onclick="resetToday('${t.id}')">↺ Hôm nay</button>
+        <button class="small danger" onclick="del('${t.id}')">Xóa</button>
+      </div>
+    </div>
+    ${done?'<div class="meta" style="color:var(--ok)">✅ Đã hoàn thành mục tiêu!</div>':''}
+  </div>`;
+}
+const esc = s => s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function render(){
+  const d = new Date();
+  today.textContent = `${DAY_NAMES[d.getDay()]}, ${d.toLocaleDateString('vi-VN')}`;
+  const dailies = state.tasks.filter(t=>t.type==='daily' && isToday(t));
+  dailyList.innerHTML = dailies.length ? dailies.map(t=>card(t,'day')).join('')
+    : '<div class="empty">Không có mục tiêu ngày cho hôm nay.</div>';
+  weeklyList.innerHTML = state.tasks.length ? state.tasks.map(t=>card(t,'week')).join('')
+    : '<div class="empty">Chưa có công việc. Bấm "+ Thêm công việc".</div>';
+  const dT = dailies.reduce((a,t)=>a+dailyTarget(t),0), dS = dailies.reduce((a,t)=>a+Math.min(spentDay(t),dailyTarget(t)),0);
+  const wT = state.tasks.reduce((a,t)=>a+weeklyTarget(t),0), wS = state.tasks.reduce((a,t)=>a+Math.min(spentWeek(t),weeklyTarget(t)),0);
+  daySum.textContent = dT ? `${Math.round(dS/dT*100)}% · còn ${fmtClock(dT-dS)}` : '';
+  weekSum.textContent = wT ? `${Math.round(wS/wT*100)}% · còn ${fmtClock(wT-wS)}` : '';
+}
+
+// tick: re-render only if something is running
+setInterval(()=>{ if(state.tasks.some(t=>t.runStart)) render(); }, 1000);
+// periodic commit so data survives crash
+setInterval(()=>{ state.tasks.forEach(t=>t.runStart&&commit(t)); save(); }, 15000);
+window.addEventListener('beforeunload', ()=>{ state.tasks.forEach(t=>t.runStart&&commit(t)); save(); });
+
+// ----- form -----
+fDaily.innerHTML = DAILY_OPTS.map(m=>`<option value="${m}">${fmtMin(m)}</option>`).join('');
+fWeekly.innerHTML = WEEKLY_OPTS.map(m=>`<option value="${m}">${fmtMin(m)}</option>`).join('');
+fDays.innerHTML = [1,2,3,4,5,6,0].map(i=>`<label><input type="checkbox" value="${i}" checked>${DAY_NAMES[i]}</label>`).join('');
+function toggleType(){
+  const daily = fType.value==='daily';
+  dailyFields.hidden = !daily; weeklyFields.hidden = daily;
+}
+function openForm(id){
+  const t = id ? state.tasks.find(x=>x.id===id) : null;
+  formTitle.textContent = t ? 'Sửa công việc' : 'Thêm công việc';
+  fId.value = t?.id || '';
+  fName.value = t?.name || ''; fUrl.value = t?.url || '';
+  fType.value = t?.type || 'daily';
+  fDaily.value = t?.daily || 30; fWeekly.value = t?.weekly || 120;
+  fDays.querySelectorAll('input').forEach(c=>c.checked = t ? t.days.includes(+c.value) : true);
+  toggleType(); dlg.showModal();
+}
+form.addEventListener('submit', e=>{
+  const days = [...fDays.querySelectorAll('input:checked')].map(c=>+c.value);
+  if(fType.value==='daily' && !days.length){ e.preventDefault(); alert('Chọn ít nhất 1 ngày'); return; }
+  const data = { name:fName.value.trim(), url:fUrl.value.trim(), type:fType.value,
+    daily:+fDaily.value, weekly:+fWeekly.value, days };
+  if(fId.value){ Object.assign(state.tasks.find(x=>x.id===fId.value), data); }
+  else state.tasks.push({ id:Date.now().toString(36), log:{}, runStart:null, ...data });
+  save(); render();
+});
+
+render();
+</script>
+</body>
+</html>
